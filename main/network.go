@@ -177,10 +177,15 @@ func isThrottled(k string) bool {
 func sendToAllConnectedClients(msg networkMessage) {
 	if (msg.msgType & NETWORK_GDL90_STANDARD) != 0 {
 		// It's a GDL90 message. Send to serial output channel (which may or may not cause something to happen).
-		serialOutputChan <- msg.msg
+		// serialOutputChan <- msg.msg
 		networkGDL90Chan <- msg.msg
 	}
 
+	if (msg.msgType & NETWORK_FLARM_NMEA) != 0 {
+		// It's a FLARM message. Send to serial output channel (which may or may not cause something to happen).
+		serialOutputChan <- msg.msg
+	}
+	
 	netMutex.Lock()
 	defer netMutex.Unlock()
 	for k, netconn := range outSockets {

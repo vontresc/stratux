@@ -1179,6 +1179,8 @@ type settings struct {
 	EstimateBearinglessDist bool
 	RadarLimits          int
 	RadarRange           int
+	SendGDL90Serial		 bool
+	SendFLARMSerial		 bool
 }
 
 type status struct {
@@ -1261,6 +1263,8 @@ func defaultSettings() {
 	globalSettings.GDL90MSLAlt_Enabled = true
 	globalSettings.SkyDemonAndroidHack = false
 	globalSettings.EstimateBearinglessDist = true
+	globalSettings.SendGDL90Serial = false
+	globalSettings.SendFLARMSerial = true
 
 	globalSettings.WiFiChannel = 1
 	globalSettings.WiFiIPAddress = "192.168.10.1"
