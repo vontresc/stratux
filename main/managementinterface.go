@@ -289,7 +289,7 @@ func handleSettingsSetRequest(w http.ResponseWriter, r *http.Request) {
 	// this insures we are recognized as supporting cross-domain AJAX REST calls
 	if r.Method == "POST" {
 		// raw, _ := httputil.DumpRequest(r, true)
-		// log.Printf("handleSettingsSetRequest:raw: %s\n", raw)
+		log.Printf("handleSettingsSetRequest:raw: %s\n", raw)
 
 		decoder := json.NewDecoder(r.Body)
 		for {
@@ -302,7 +302,7 @@ func handleSettingsSetRequest(w http.ResponseWriter, r *http.Request) {
 				log.Printf("handleSettingsSetRequest:error: %s\n", err.Error())
 			} else {
 				for key, val := range msg {
-					// log.Printf("handleSettingsSetRequest:json: testing for key:%s of type %s\n", key, reflect.TypeOf(val))
+					log.Printf("handleSettingsSetRequest:json: testing for key:%s of type %s\n", key, reflect.TypeOf(val))
 					switch key {
 					case "UAT_Enabled":
 						globalSettings.UAT_Enabled = val.(bool)
