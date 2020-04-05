@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/user" 
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -272,7 +273,6 @@ func handleSatellitesRequest(w http.ResponseWriter, r *http.Request) {
 func handleSettingsGetRequest(w http.ResponseWriter, r *http.Request) {
 	setNoCache(w)
 	setJSONHeaders(w)
-	readWiFiUserSettings()
 	settingsJSON, _ := json.Marshal(&globalSettings)
 	fmt.Fprintf(w, "%s\n", settingsJSON)
 }
@@ -372,21 +372,27 @@ func handleSettingsSetRequest(w http.ResponseWriter, r *http.Request) {
 					case "GLimits":
 						globalSettings.GLimits = val.(string)
 					case "OwnshipModeS":
-						// Expecting a hex string less than 6 characters (24 bits) long.
-						if len(val.(string)) > 6 { // Too long.
-							continue
+						codes := strings.Split(val.(string), ",")
+						codesFinal :=  make([]string, 0)
+						for _, code := range codes {
+							code = strings.Trim(code, " ")
+							// Expecting a hex string less than 6 characters (24 bits) long.
+							if len(code) > 6 { // Too long.
+								continue
+							}
+							// Pad string, must be 6 characters long.
+							vals := strings.ToUpper(code)
+							for len(vals) < 6 {
+								vals = "0" + vals
+							}
+							hexn, err := hex.DecodeString(vals)
+							if err != nil { // Number not valid.
+								log.Printf("handleSettingsSetRequest:OwnshipModeS: %s\n", err.Error())
+								continue
+							}
+							codesFinal = append(codesFinal, fmt.Sprintf("%02X%02X%02X", hexn[0], hexn[1], hexn[2]))
 						}
-						// Pad string, must be 6 characters long.
-						vals := strings.ToUpper(val.(string))
-						for len(vals) < 6 {
-							vals = "0" + vals
-						}
-						hexn, err := hex.DecodeString(vals)
-						if err != nil { // Number not valid.
-							log.Printf("handleSettingsSetRequest:OwnshipModeS: %s\n", err.Error())
-							continue
-						}
-						globalSettings.OwnshipModeS = fmt.Sprintf("%02X%02X%02X", hexn[0], hexn[1], hexn[2])
+						globalSettings.OwnshipModeS = strings.Join(codesFinal, ",")
 					case "StaticIps":
 						ipsStr := val.(string)
 						ips := strings.Split(ipsStr, " ")
@@ -415,12 +421,20 @@ func handleSettingsSetRequest(w http.ResponseWriter, r *http.Request) {
 						setWifiSecurityEnabled(val.(bool))
 					case "WiFiPassphrase":
 						setWifiPassphrase(val.(string))
+					case "WiFiSmartEnabled":
+						setWifiSmartEnabled(val.(bool))
 					case "WiFiIPAddress":
 						setWifiIPAddress(val.(string))
+					case "WiFiMode":
+						setWiFiMode(int(val.(float64)))
+					case "WiFiDirectPin":
+						setWifiDirectPin(val.(string))
 					case "GDL90MSLAlt_Enabled":
 						globalSettings.GDL90MSLAlt_Enabled = val.(bool)
 					case "SkyDemonAndroidHack":
 						globalSettings.SkyDemonAndroidHack = val.(bool)
+					case "EstimateBearinglessDist":
+						globalSettings.EstimateBearinglessDist = val.(bool)
 					default:
 						log.Printf("handleSettingsSetRequest:json: unrecognized key:%s\n", key)
 					}
@@ -889,7 +903,12 @@ func managementInterface() {
 	http.HandleFunc("/downloadahrslogs", handleDownloadAHRSLogsRequest)
 	http.HandleFunc("/downloaddb", handleDownloadDBRequest)
 
-	err := http.ListenAndServe(managementAddr, nil)
+	usr, _ := user.Current()
+	addr := managementAddr
+	if usr.Username != "root" {
+		addr = ":8000" // Make sure we can run without root priviledges on different port
+	}
+	err := http.ListenAndServe(addr, nil)
 
 	if err != nil {
 		log.Printf("managementInterface ListenAndServe: %s\n", err.Error())

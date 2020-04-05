@@ -8,7 +8,7 @@ function SettingsCtrl($rootScope, $scope, $state, $location, $window, $http) {
 	$scope.$parent.helppage = 'plates/settings-help.html';
 
 	var toggles = ['UAT_Enabled', 'ES_Enabled', 'FLARM_Enabled', 'Ping_Enabled', 'GPS_Enabled', 'IMU_Sensor_Enabled',
-		'BMP_Sensor_Enabled', 'DisplayTrafficSource', 'DEBUG', 'ReplayLog', 'AHRSLog', 'GDL90MSLAlt_Enabled', 'SkyDemonAndroidHack'];
+		'BMP_Sensor_Enabled', 'DisplayTrafficSource', 'DEBUG', 'ReplayLog', 'AHRSLog', 'GDL90MSLAlt_Enabled', 'SkyDemonAndroidHack', 'EstimateBearinglessDist'];
 	var settings = {};
 	for (var i = 0; i < toggles.length; i++) {
 		settings[toggles[i]] = undefined;
@@ -44,13 +44,18 @@ function SettingsCtrl($rootScope, $scope, $state, $location, $window, $http) {
         $scope.GLimits = settings.GLimits;
         $scope.GDL90MSLAlt_Enabled = settings.GDL90MSLAlt_Enabled;
 		$scope.SkyDemonAndroidHack = settings.SkyDemonAndroidHack;
+		$scope.EstimateBearinglessDist = settings.EstimateBearinglessDist
 		$scope.StaticIps = settings.StaticIps;
 
         $scope.WiFiSSID = settings.WiFiSSID;
         $scope.WiFiPassphrase = settings.WiFiPassphrase;
         $scope.WiFiSecurityEnabled = settings.WiFiSecurityEnabled;
         $scope.WiFiChannel = settings.WiFiChannel;
+		$scope.WiFiSmartEnabled = settings.WiFiSmartEnabled;
 		$scope.WiFiIPAddress = settings.WiFiIPAddress;
+
+		$scope.WiFiMode = settings.WiFiMode.toString();
+		$scope.WiFiDirectPin = settings.WiFiDirectPin;
 
         $scope.Channels = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 	}
@@ -292,7 +297,10 @@ function SettingsCtrl($rootScope, $scope, $state, $location, $window, $http) {
                 "WiFiSecurityEnabled" : $scope.WiFiSecurityEnabled,
                 "WiFiPassphrase" : $scope.WiFiPassphrase,
                 "WiFiChannel" : parseInt($scope.WiFiChannel),
-				"WiFiIPAddress" : $scope.WiFiIPAddress
+				"WiFiSmartEnabled": $scope.WiFiSmartEnabled,
+				"WiFiIPAddress" : $scope.WiFiIPAddress,
+				"WiFiMode" : parseInt($scope.WiFiMode),
+				"WiFiDirectPin": $scope.WiFiDirectPin
             };
 
             // console.log(angular.toJson(newsettings));
@@ -306,6 +314,7 @@ function SettingsCtrl($rootScope, $scope, $state, $location, $window, $http) {
 
 function isValidSSID(str) { return /^[a-zA-Z0-9()_-]{1,32}$/g.test(str); }
 function isValidWPA(str) { return /^[\u0020-\u007e]{8,63}$/g.test(str); }
+function isValidPin(str) { return /^([\d]{4}|[\d]{8})$/g.test(str); }
 
 angular.module('appControllers')
     .directive('hexInput', function() { // directive for ownship hex code validation
@@ -313,7 +322,7 @@ angular.module('appControllers')
             require: 'ngModel',
             link: function(scope, element, attr, ctrl) {
                 function hexValidation(value) {
-                    var valid = /^$|^[0-9A-Fa-f]{6}$/.test(value);
+                    var valid = /^$|^([0-9A-Fa-f]{6},?)*$/.test(value);
                     ctrl.$setValidity('FAAHex', valid);
                     if (valid) {
                         return value;
@@ -379,6 +388,23 @@ angular.module('appControllers')
             }
         };
     })
+	.directive('pinInput', function() {
+        return {
+            require: 'ngModel',
+            link: function(scope, element, attr, ctrl) {
+                function pinValidation(value) {
+                    var valid = isValidPin(value);
+                    ctrl.$setValidity('WiFiDirectPin', valid);
+                    if (valid) {
+                        return value;
+                    } else {
+                        return "";
+                    }
+                }
+                ctrl.$parsers.push(pinValidation);
+            }
+        };	
+	})
     .directive('ipListInput', function() { // directive for validation of list of IP addresses
         return {
             require: 'ngModel',

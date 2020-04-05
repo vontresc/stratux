@@ -15,7 +15,7 @@ all:
 
 xgen_gdl90:
 	go get -t -d -v ./main ./godump978 ./uatparse ./sensors
-	export CGO_CFLAGS_ALLOW="-L/root/stratux" && go build $(BUILDINFO) -p 4 main/gen_gdl90.go main/traffic.go main/gps.go main/network.go main/managementinterface.go main/sdr.go main/ping.go main/uibroadcast.go main/monotonic.go main/datalog.go main/equations.go main/sensors.go main/cputemp.go main/lowpower_uat.go main/flarm.go main/flarm-nmea.go main/networksettings.go
+	export CGO_CFLAGS_ALLOW="-L/root/stratux" && go build $(BUILDINFO) -p 4 main/gen_gdl90.go main/traffic.go main/gps.go main/network.go main/managementinterface.go main/sdr.go main/ping.go main/uibroadcast.go main/monotonic.go main/datalog.go main/equations.go main/sensors.go main/cputemp.go main/lowpower_uat.go main/flarm.go main/flarm-nmea.go main/networksettings.go main/xplane.go
 
 fancontrol:
 	go get -t -d -v ./main
@@ -56,11 +56,17 @@ install:
 	cp -f dump1090/dump1090 /usr/bin/
 	cp -f image/hostapd_manager.sh /usr/sbin/
 	cp -f image/stratux-wifi.sh /usr/sbin/
+	cp -f image/hostapd.conf.template /etc/hostapd/
+	cp -f image/interfaces.template /etc/network/
+	cp -f image/wpa_supplicant.conf.template /etc/wpa_supplicant/
+	mkdir -p  /var/lib/stratux/
+	cp -f ogn/rtlsdr-ogn/stratux.conf.template /etc/stratux-ogn.conf.template
 	rm -f /var/run/ogn-rf.fifo
 	mkfifo /var/run/ogn-rf.fifo
 	cp -f ogn/rtlsdr-ogn/ogn-rf /usr/bin/
 	chmod a+s /usr/bin/ogn-rf
 	cp -f ogn/rtlsdr-ogn/ogn-decode /usr/bin/
+	cp -f ogn/ddb.json /etc/
 
 clean:
 	rm -f gen_gdl90 libdump978.so fancontrol ahrs_approx

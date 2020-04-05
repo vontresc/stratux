@@ -97,6 +97,7 @@ const (
 	GPS_TYPE_UBX6     = 0x06
 	GPS_TYPE_PROLIFIC = 0x02
 	GPS_TYPE_UART     = 0x01
+	GPS_TYPE_FLARM    = 0x0A
 	GPS_PROTOCOL_NMEA = 0x10
 	GPS_PROTOCOL_UBX  = 0x30
 	// other GPS types to be defined as needed
@@ -281,7 +282,7 @@ func makeLatLng(v float32) []byte {
 }
 
 func isDetectedOwnshipValid() bool {
-	return stratuxClock.Since(OwnshipTrafficInfo.Last_seen) < 10*time.Second
+	return stratuxClock.Since(OwnshipTrafficInfo.Last_seen).Seconds() < 10
 }
 
 func makeOwnshipReport() bool {
@@ -296,7 +297,10 @@ func makeOwnshipReport() bool {
 	// See p.16.
 	msg[0] = 0x0A // Message type "Ownship".
 
-	msg[1] = 0x01 // Alert status, address type.
+	// Ownship Target Identify (see 3.5.1.2 of GDL-90 Specifications)
+	// First half of byte is 0 for 'No Traffic Alert'
+	// Second half of byte is 0 for 'ADS-B with ICAO'
+	msg[1] = 0x00 // Alert status, address type.
 
 	code, _ := hex.DecodeString(globalSettings.OwnshipModeS)
 	if len(code) != 3 {
@@ -311,25 +315,23 @@ func makeOwnshipReport() bool {
 	}
 
 	var tmp []byte
+	var lat, lon float32
 	if selfOwnshipValid {
-		tmp = makeLatLng(curOwnship.Lat)
-		msg[5] = tmp[0] // Latitude.
-		msg[6] = tmp[1] // Latitude.
-		msg[7] = tmp[2] // Latitude.
-		tmp = makeLatLng(curOwnship.Lng)
-		msg[8] = tmp[0]  // Longitude.
-		msg[9] = tmp[1]  // Longitude.
-		msg[10] = tmp[2] // Longitude.
+		lat = curOwnship.Lat
+		lon = curOwnship.Lng
 	} else {
-		tmp = makeLatLng(mySituation.GPSLatitude)
-		msg[5] = tmp[0] // Latitude.
-		msg[6] = tmp[1] // Latitude.
-		msg[7] = tmp[2] // Latitude.
-		tmp = makeLatLng(mySituation.GPSLongitude)
-		msg[8] = tmp[0]  // Longitude.
-		msg[9] = tmp[1]  // Longitude.
-		msg[10] = tmp[2] // Longitude.
+		lat = mySituation.GPSLatitude
+		lon = mySituation.GPSLongitude
 	}
+
+	tmp = makeLatLng(lat)
+	msg[5] = tmp[0] // Latitude.
+	msg[6] = tmp[1] // Latitude.
+	msg[7] = tmp[2] // Latitude.
+	tmp = makeLatLng(lon)
+	msg[8] = tmp[0]  // Longitude.
+	msg[9] = tmp[1]  // Longitude.
+	msg[10] = tmp[2] // Longitude.
 
 	// This is **PRESSURE ALTITUDE**
 	alt := uint16(0xFFF) // 0xFFF "invalid altitude."
@@ -437,6 +439,8 @@ func makeOwnshipReport() bool {
 	}
 
 	sendGDL90(prepareMessage(msg), false)
+	sendXPlane(createXPlaneGpsMsg(lat, lon, mySituation.GPSAltitudeMSL, groundTrack, float32(gdSpeed)), false)
+
 	return true
 }
 
@@ -845,7 +849,7 @@ func updateMessageStats() {
 	}
 
 	for i := 0; i < m; i++ {
-		if stratuxClock.Since(MsgLog[i].TimeReceived) < 1*time.Minute {
+		if stratuxClock.Since(MsgLog[i].TimeReceived).Minutes() < 1 {
 			t = append(t, MsgLog[i])
 			if MsgLog[i].MessageClass == MSGCLASS_UAT {
 				UAT_messages_last_minute++
@@ -1164,9 +1168,15 @@ type settings struct {
 	WiFiChannel          int
 	WiFiSecurityEnabled  bool
 	WiFiPassphrase       string
+	WiFiSmartEnabled     bool // "Smart WiFi" - disables the default gateway for iOS.
+
+
+	WiFiMode             int
+	WiFiDirectPin        string
 	WiFiIPAddress        string
 	GDL90MSLAlt_Enabled  bool
 	SkyDemonAndroidHack  bool
+	EstimateBearinglessDist bool
 	RadarLimits          int
 	RadarRange           int
 }
@@ -1238,7 +1248,7 @@ func defaultSettings() {
 	globalSettings.NetworkOutputs = []networkConnection{
 		{Conn: nil, Ip: "", Port: 4000, Capability: NETWORK_GDL90_STANDARD | NETWORK_AHRS_GDL90},
 		{Conn: nil, Ip: "", Port: 2000, Capability: NETWORK_FLARM_NMEA},
-		//		{Conn: nil, Ip: "", Port: 49002, Capability: NETWORK_AHRS_FFSIM},
+		{Conn: nil, Ip: "", Port: 49002, Capability: NETWORK_POSITION_FFSIM | NETWORK_AHRS_FFSIM},
 	}
 	globalSettings.DEBUG = false
 	globalSettings.DisplayTrafficSource = false
@@ -1250,6 +1260,7 @@ func defaultSettings() {
 	globalSettings.StaticIps = make([]string, 0)
 	globalSettings.GDL90MSLAlt_Enabled = true
 	globalSettings.SkyDemonAndroidHack = false
+	globalSettings.EstimateBearinglessDist = true
 
 	globalSettings.WiFiChannel = 1
 	globalSettings.WiFiIPAddress = "192.168.10.1"
@@ -1285,7 +1296,6 @@ func readSettings() {
 	}
 	globalSettings = newSettings
 	log.Printf("read in settings.\n")
-	readWiFiUserSettings()
 }
 
 func addSystemError(err error) {
@@ -1318,59 +1328,6 @@ func saveSettings() {
 	fd.Write(jsonSettings)
 	fd.Sync()
 	log.Printf("wrote settings.\n")
-}
-
-func readWiFiUserSettings() {
-	fd, err := os.Open(wifiConfigLocation)
-	if err != nil {
-		log.Printf("can't read wifi settings %s: %s\n", wifiConfigLocation, err.Error())
-		return
-	}
-	defer fd.Close()
-
-	// Default values
-	globalSettings.WiFiSSID = "stratux"
-	globalSettings.WiFiChannel = 8
-	globalSettings.WiFiSecurityEnabled = false
-
-	scanner := bufio.NewScanner(fd)
-	var line []string
-	for scanner.Scan() {
-		line = strings.SplitN(scanner.Text(), "=", 2)
-		switch line[0] {
-		case "ssid":
-			globalSettings.WiFiSSID = line[1]
-		case "channel":
-			globalSettings.WiFiChannel, _ = strconv.Atoi(line[1])
-		case "wpa_passphrase":
-			globalSettings.WiFiPassphrase = line[1]
-			globalSettings.WiFiSecurityEnabled = true
-		default:
-		}
-	}
-	return
-}
-
-func saveWiFiUserSettings() {
-	fd, err := os.OpenFile(wifiConfigLocation, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(0644))
-	if err != nil {
-		err_ret := fmt.Errorf("can't save settings %s: %s", wifiConfigLocation, err.Error())
-		addSystemError(err_ret)
-		log.Printf("%s\n", err_ret.Error())
-		return
-	}
-	defer fd.Close()
-
-	writer := bufio.NewWriter(fd)
-	fmt.Fprintf(writer, "ssid=%s\n", globalSettings.WiFiSSID)
-	fmt.Fprintf(writer, "channel=%d\n", globalSettings.WiFiChannel)
-	fmt.Fprint(writer, "\n")
-	if globalSettings.WiFiSecurityEnabled {
-		fmt.Fprint(writer, "auth_algs=1\nwpa=3\nwpa_key_mgmt=WPA-PSK\nwpa_pairwise=TKIP\nrsn_pairwise=CCMP\n")
-		fmt.Fprintf(writer, "wpa_passphrase=%s\n", globalSettings.WiFiPassphrase)
-	}
-	writer.Flush()
-	fd.Sync()
 }
 
 func openReplay(fn string, compressed bool) (WriteCloser, error) {
@@ -1425,6 +1382,7 @@ func printStats() {
 			log.Printf(" - Last GPS fix: %s, GPS solution type: %d using %d satellites (%d/%d seen/tracked), NACp: %d, est accuracy %.02f m\n", stratuxClock.HumanizeTime(mySituation.GPSLastFixLocalTime), mySituation.GPSFixQuality, mySituation.GPSSatellites, mySituation.GPSSatellitesSeen, mySituation.GPSSatellitesTracked, mySituation.GPSNACp, mySituation.GPSHorizontalAccuracy)
 			log.Printf(" - GPS vertical velocity: %.02f ft/sec; GPS vertical accuracy: %v m\n", mySituation.GPSVerticalSpeed, mySituation.GPSVerticalAccuracy)
 		}
+		log.Printf(" - Mode-S Distance factors (<5000, <10000, >10000): %f, %f, %f", estimatedDistFactors[0], estimatedDistFactors[1], estimatedDistFactors[2])
 		sensorsOutput := make([]string, 0)
 		if globalSettings.IMU_Sensor_Enabled {
 			sensorsOutput = append(sensorsOutput, fmt.Sprintf("Last IMU read: %s", stratuxClock.HumanizeTime(mySituation.AHRSLastAttitudeTime)))
@@ -1576,6 +1534,10 @@ func clearDebugLogFile() {
 	}
 }
 
+func isX86DebugMode() bool {
+	return runtime.GOARCH == "i386" || runtime.GOARCH == "amd64"
+}
+
 func main() {
 	// Catch signals for graceful shutdown.
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
@@ -1702,7 +1664,9 @@ func main() {
 	initDataLog()
 
 	// Start the AHRS sensor monitoring.
-	initI2CSensors()
+	if !isX86DebugMode() {
+		initI2CSensors()
+	}
 
 	// Start the GPS external sensor monitoring.
 	initGPS()
@@ -1766,3 +1730,4 @@ func main() {
 		select {}
 	}
 }
+

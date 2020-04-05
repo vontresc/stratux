@@ -123,7 +123,7 @@ func tempAndPressureSender() {
 }
 
 func initIMU() (ok bool) {
-	imu, err := sensors.NewMPU9250()
+	imu, err := sensors.NewMPU9250(&i2cbus)
 	if err == nil {
 		myIMUReader = imu
 		return true
@@ -311,6 +311,7 @@ func sensorAttitudeSender() {
 			mySituation.muAttitude.Unlock()
 
 			makeAHRSGDL90Report() // Send whether or not valid - the function will invalidate the values as appropriate
+			makeAHRSSimReport()
 
 			// Send to AHRS debugging server.
 			if ahrswebListener != nil {
