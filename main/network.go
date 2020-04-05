@@ -185,7 +185,9 @@ func sendToAllConnectedClients(msg networkMessage) {
 
 	if (msg.msgType & NETWORK_FLARM_NMEA) != 0 {
 		// It's a FLARM message. Send to serial output channel (which may or may not cause something to happen).
-		if globalSettings.SendGDL90Serial {
+		log.Printf("SendFLARMSerial: %s\n", globalSettings.SendGDL90Serial)
+		log.Printf("FLARM Msg: %s\n", string(msg.msg))
+		if globalSettings.SendFLARMSerial {
 			serialOutputChan <- msg.msg
 		}
 	}
