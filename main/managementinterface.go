@@ -285,7 +285,7 @@ func handleSettingsSetRequest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Method", "GET, POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept")
 
-	log.printf("handle settingreq was called")
+	log.Printf("handle settingreq was called")
 	// for an OPTION method request, we return header without processing.
 	// this insures we are recognized as supporting cross-domain AJAX REST calls
 	if r.Method == "POST" {
