@@ -436,9 +436,9 @@ func handleSettingsSetRequest(w http.ResponseWriter, r *http.Request) {
 					case "EstimateBearinglessDist":
 						globalSettings.EstimateBearinglessDist = val.(bool)
 					case "SendGDL90Serial":
-						lobalSettings.SendGDL90Serial = val.(bool)
+						globalSettings.SendGDL90Serial = val.(bool)
 					case "SendFLARMSerial":
-						lobalSettings.SendFLARMSerial = val.(bool)
+						globalSettings.SendFLARMSerial = val.(bool)
 					default:
 						log.Printf("handleSettingsSetRequest:json: unrecognized key:%s\n", key)
 					}
