@@ -179,17 +179,21 @@ func sendToAllConnectedClients(msg networkMessage) {
 		// It's a GDL90 message. Send to serial output channel (which may or may not cause something to happen).
 		if globalSettings.SendGDL90Serial {
 			serialOutputChan <- msg.msg
+			if globalSettings.DEBUG {
+				log.Printf("Serial GDL90 msg: %m \n", string(msg.msg))
+			}
 		}
 		networkGDL90Chan <- msg.msg
 	}
 
 	if (msg.msgType & NETWORK_FLARM_NMEA) != 0 {
 		// It's a FLARM message. Send to serial output channel (which may or may not cause something to happen).
-		log.Printf("SendFLARMSerial: %s\n", globalSettings.SendFLARMSerial)
-		log.Printf("DEBUG: %s\n", globalSettings.DEBUG)
-		log.Printf("FLARM Msg: %s\n", string(msg.msg))
+
 		if globalSettings.SendFLARMSerial {
 			serialOutputChan <- msg.msg
+			if globalSettings.DEBUG {
+				log.Printf("Serial FLARM msg: %m \n", string(msg.msg))
+			}
 		}
 	}
 	
