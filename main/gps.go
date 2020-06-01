@@ -36,6 +36,14 @@ const (
 	SAT_TYPE_SBAS    = 10 // NMEA IDs 33-54
 )
 
+const (
+	BARO_TYPE_NONE         = 0 // No baro present
+	BARO_TYPE_BMP280       = 1 // Stratux AHRS module or similar internal baro
+	BARO_TYPE_OGNTRACKER   = 2 // OGN Tracker with baro pressure
+	BARO_TYPE_NMEA         = 3 // Other NMEA provider that reports $PGRMZ (SoftRF)
+	BARO_TYPE_ADSBESTIMATE = 4 // If we have no baro, we will try to estimate baro pressure from ADS-B targets reporting GnssDiffFromBaroAlt (HAE<->Baro difference)
+)
+
 type SatelliteInfo struct {
 	SatelliteNMEA    uint8     // NMEA ID of the satellite. 1-32 is GPS, 33-54 is SBAS, 65-88 is Glonass.
 	SatelliteID      string    // Formatted code indicating source and PRN code. e.g. S138==WAAS satellite 138, G2==GPS satellites 2
@@ -85,6 +93,7 @@ type SituationData struct {
 	BaroPressureAltitude    float32
 	BaroVerticalSpeed       float32
 	BaroLastMeasurementTime time.Time
+	BaroSourceType          uint8
 
 	// From AHRS source.
 	muAttitude           *sync.Mutex
@@ -121,6 +130,7 @@ type gpsPerfStats struct {
 
 var gpsPerf gpsPerfStats
 var myGPSPerfStats []gpsPerfStats
+var gpsTimeOffsetPpsMs = 100.0 * time.Millisecond
 
 var serialConfig *serial.Config
 var serialPort *serial.Port
@@ -202,6 +212,7 @@ func initGPSSerial() bool {
 	} else if _, err := os.Stat("/dev/ublox8"); err == nil { // u-blox 8 (RY83xAI or GPYes 2.0).
 		device = "/dev/ublox8"
 		globalStatus.GPS_detected_type = GPS_TYPE_UBX8
+		gpsTimeOffsetPpsMs = 80 * time.Millisecond // Ublox 8 seems to have higher delay
 	} else if _, err := os.Stat("/dev/ublox7"); err == nil { // u-blox 7 (VK-172, VK-162 Rev 2, GPYes, RY725AI over USB).
 		device = "/dev/ublox7"
 		globalStatus.GPS_detected_type = GPS_TYPE_UBX7
@@ -217,7 +228,11 @@ func initGPSSerial() bool {
 	} else if _, err := os.Stat("/dev/flarm"); err == nil {
 		device = "/dev/flarm"
 		globalStatus.GPS_detected_type = GPS_TYPE_FLARM
-		baudrate = 38400
+		baudrate = 115200
+ 	} else if _, err := os.Stat("/dev/softrf_dongle"); err == nil {
+		device = "/dev/softrf_dongle"
+		globalStatus.GPS_detected_type = GPS_TYPE_SOFTRF_DONGLE
+		baudrate = 115200
  	} else if _, err := os.Stat("/dev/ttyAMA0"); err == nil { // ttyAMA0 is PL011 UART (GPIO pins 8 and 10) on all RPi.
 		device = "/dev/ttyAMA0"
 		globalStatus.GPS_detected_type = GPS_TYPE_UART
@@ -268,7 +283,8 @@ func initGPSSerial() bool {
 		if globalSettings.DEBUG {
 			log.Printf("Finished writing SiRF GPS config to %s. Opening port to test connection.\n", device)
 		}
-	} else {
+	} else if globalStatus.GPS_detected_type == GPS_TYPE_UBX6 || globalStatus.GPS_detected_type == GPS_TYPE_UBX7 ||
+	          globalStatus.GPS_detected_type == GPS_TYPE_UBX8 || globalStatus.GPS_detected_type == GPS_TYPE_UBX9 {
 
 		// Byte order for UBX configuration is little endian.
 
@@ -348,11 +364,11 @@ func initGPSSerial() bool {
 
 		// UBX-CFG-MSG (NMEA Standard Messages)  msg   msg   Ports 1-6 (every 10th message over UART1, every message over USB)
 		//                                       Class ID    DDC   UART1 UART2 USB   I2C   Res
-		p.Write(makeUBXCFG(0x06, 0x01, 8, []byte{0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})) // GGA - Global positioning system fix data
+		p.Write(makeUBXCFG(0x06, 0x01, 8, []byte{0xF0, 0x00, 0x00, 0x0A, 0x00, 0x0A, 0x00, 0x00})) // GGA - Global positioning system fix data
 		p.Write(makeUBXCFG(0x06, 0x01, 8, []byte{0xF0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})) // GLL - Latitude and longitude, with time of position fix and status
 		p.Write(makeUBXCFG(0x06, 0x01, 8, []byte{0xF0, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})) // GSA - GNSS DOP and Active Satellites
 		p.Write(makeUBXCFG(0x06, 0x01, 8, []byte{0xF0, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})) // GSV - GNSS Satellites in View
-		p.Write(makeUBXCFG(0x06, 0x01, 8, []byte{0xF0, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})) // RMC - Recommended Minimum data
+		p.Write(makeUBXCFG(0x06, 0x01, 8, []byte{0xF0, 0x04, 0x00, 0x0A, 0x00, 0x0A, 0x00, 0x00})) // RMC - Recommended Minimum data
 		p.Write(makeUBXCFG(0x06, 0x01, 8, []byte{0xF0, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})) // VGT - Course over ground and Ground speed
 		p.Write(makeUBXCFG(0x06, 0x01, 8, []byte{0xF0, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})) // GRS - GNSS Range Residuals
 		p.Write(makeUBXCFG(0x06, 0x01, 8, []byte{0xF0, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})) // GST - GNSS Pseudo Range Error Statistics
@@ -413,6 +429,12 @@ func initGPSSerial() bool {
 		if globalSettings.DEBUG {
 			log.Printf("Finished writing u-blox GPS config to %s. Opening port to test connection.\n", device)
 		}
+	} else if globalStatus.GPS_detected_type == GPS_TYPE_SOFTRF_DONGLE {
+		p.Write([]byte("@GNS 0x7\r\n")) // enable SBAS
+		p.Flush()
+		time.Sleep(250* time.Millisecond) // Otherwise second command doesn't seem to work?
+		p.Write([]byte("@BSSL 0x2D\r\n")) // enable GNGSV
+		p.Flush()
 	}
 	p.Close()
 
@@ -944,6 +966,7 @@ func processNMEALine(l string) (sentenceUsed bool) {
 		}
 		return false
 	}
+	ognPublishNmea(l)
 	x := strings.Split(l_valid, ",")
 
 	mySituation.GPSLastValidNMEAMessageTime = stratuxClock.Time
@@ -1263,13 +1286,13 @@ func processNMEALine(l string) (sentenceUsed bool) {
 					//log.Printf("Satellite %s is no longer in solution and has no ephemeris - UBX,03\n", svStr) // DEBUG
 				}
 
-				if globalSettings.DEBUG {
-					inSolnStr := " "
-					if thisSatellite.InSolution {
-						inSolnStr = "+"
-					}
-					log.Printf("UBX: Satellite %s%s at index %d. Type = %d, NMEA-ID = %d, Elev = %d, Azimuth = %d, Cno = %d\n", inSolnStr, svStr, i, svType, sv, elev, az, cno) // remove later?
-				}
+				//if globalSettings.DEBUG {
+				//	inSolnStr := " "
+				//	if thisSatellite.InSolution {
+				//		inSolnStr = "+"
+				//	}
+				//	log.Printf("UBX: Satellite %s%s at index %d. Type = %d, NMEA-ID = %d, Elev = %d, Azimuth = %d, Cno = %d\n", inSolnStr, svStr, i, svType, sv, elev, az, cno) // remove later?
+				//}
 
 				Satellites[thisSatellite.SatelliteID] = thisSatellite // Update constellation with this satellite
 				updateConstellation()
@@ -1311,6 +1334,7 @@ func processNMEALine(l string) (sentenceUsed bool) {
 				// Date of Fix, i.e 191115 =  19 November 2015 UTC  field 9
 				gpsTimeStr := fmt.Sprintf("%s %02d:%02d:%06.3f", x[3], hr, min, sec)
 				gpsTime, err := time.Parse("020106 15:04:05.000", gpsTimeStr)
+				gpsTime = gpsTime.Add(gpsTimeOffsetPpsMs) // rough estimate for PPS offset
 				if err == nil {
 					// We only update ANY of the times if all of the time parsing is complete.
 					mySituation.GPSLastGPSTimeStratuxTime = stratuxClock.Time
@@ -1318,7 +1342,7 @@ func processNMEALine(l string) (sentenceUsed bool) {
 					stratuxClock.SetRealTimeReference(gpsTime)
 					mySituation.GPSLastFixSinceMidnightUTC = float32(3600*hr+60*min) + float32(sec)
 					// log.Printf("GPS time is: %s\n", gpsTime) //debug
-					if time.Since(gpsTime) > 3*time.Second || time.Since(gpsTime) < -3*time.Second {
+					if time.Since(gpsTime) > 50*time.Millisecond || time.Since(gpsTime) < -50*time.Millisecond {
 						setStr := gpsTime.Format("20060102 15:04:05.000") + " UTC"
 						log.Printf("setting system time to: '%s'\n", setStr)
 						if err := exec.Command("date", "-s", setStr).Run(); err != nil {
@@ -1526,11 +1550,12 @@ func processNMEALine(l string) (sentenceUsed bool) {
 			// Date of Fix, i.e 191115 =  19 November 2015 UTC  field 9
 			gpsTimeStr := fmt.Sprintf("%s %02d:%02d:%06.3f", x[9], hr, min, sec)
 			gpsTime, err := time.Parse("020106 15:04:05.000", gpsTimeStr)
+			gpsTime = gpsTime.Add(gpsTimeOffsetPpsMs) // rough estimate for PPS offset
 			if err == nil && gpsTime.After(time.Date(2016, time.January, 0, 0, 0, 0, 0, time.UTC)) { // Ignore dates before 2016-JAN-01.
 				tmpSituation.GPSLastGPSTimeStratuxTime = stratuxClock.Time
 				tmpSituation.GPSTime = gpsTime
 				stratuxClock.SetRealTimeReference(gpsTime)
-				if time.Since(gpsTime) > 3*time.Second || time.Since(gpsTime) < -3*time.Second {
+				if time.Since(gpsTime) > 50*time.Millisecond || time.Since(gpsTime) < -50*time.Millisecond {
 					setStr := gpsTime.Format("20060102 15:04:05.000") + " UTC"
 					log.Printf("setting system time to: '%s'\n", setStr)
 					if err := exec.Command("date", "-s", setStr).Run(); err != nil {
@@ -1898,12 +1923,146 @@ func processNMEALine(l string) (sentenceUsed bool) {
 		return true
 	}
 
+	// OGN Tracker pressure data:
+	// $POGNB,22.0,+29.1,100972.3,3.8,+29.4,+87.2,-0.04,+32.6,*6B
+	if x[0] == "POGNB" {
+		if len(x) < 5 {
+			return false
+		}
+		var vspeed float64
+
+		pressureAlt, err := strconv.ParseFloat(x[5], 32)
+		if err != nil {
+			return false
+		}
+		
+		vspeed, err = strconv.ParseFloat(x[7], 32)
+		if err != nil {
+			return false
+		}
+
+		if !isTempPressValid() || mySituation.BaroSourceType != BARO_TYPE_BMP280 {
+			mySituation.muBaro.Lock()
+			mySituation.BaroPressureAltitude = float32(pressureAlt * 3.28084) // meters to feet
+			mySituation.BaroVerticalSpeed = float32(vspeed * 196.85) // m/s in ft/min
+			mySituation.BaroLastMeasurementTime = stratuxClock.Time
+			mySituation.BaroSourceType = BARO_TYPE_OGNTRACKER
+			mySituation.muBaro.Unlock()
+		}
+		return true
+	}
+
+	// Only evaluate PGRMZ for SoftRF/Flarm, where we know that it is standard barometric pressure.
+	// might want to add more types if applicable.
+	// $PGRMZ,1089,f,3*2B
+	if x[0] == "PGRMZ" && ((globalStatus.GPS_detected_type & 0x0f) ==  GPS_TYPE_FLARM || (globalStatus.GPS_detected_type & 0x0f) == GPS_TYPE_SOFTRF_DONGLE) {
+		if len(x) < 3 {
+			return false
+		}
+		// Assume pressure altitude in PGRMZ if we don't have any other baro (SoftRF style)
+		pressureAlt, err := strconv.ParseFloat(x[1], 32)
+		if err != nil {
+			return false
+		}
+		unit := x[2]
+		if unit == "m" {
+			pressureAlt *= 3.28084
+		}
+		// Prefer internal sensor and OGN tracker over this...
+		if !isTempPressValid() || (mySituation.BaroSourceType != BARO_TYPE_BMP280 && mySituation.BaroSourceType != BARO_TYPE_OGNTRACKER) {
+			mySituation.muBaro.Lock()
+			mySituation.BaroPressureAltitude = float32(pressureAlt) // meters to feet
+			mySituation.BaroLastMeasurementTime = stratuxClock.Time
+			mySituation.BaroSourceType = BARO_TYPE_NMEA
+			mySituation.muBaro.Unlock()
+		}
+	}
+
+	// Flarm NMEA traffic data
 	if x[0] == "PFLAU" || x[0] == "PFLAA" {
 		parseFlarmNmeaMessage(x)
+		return true
 	}
 
 	// If we've gotten this far, the message isn't one that we can use.
 	return false
+}
+
+
+// Maps 1000ft bands to gnssBaroAltDiffs of known traffic.
+// This will then be used to estimate our own baro altitude from GNSS if we don't have a pressure sensor connected...
+// Data will receive exponential smoothing so outliers hopefully don't have too much effect
+var gnssBaroAltDiffs = make(map [int]int)
+func baroAltGuesser() {
+	ticker := time.NewTicker(1 * time.Second)
+	for {
+		<-ticker.C
+
+		avgDiff := 0
+		for _, v := range gnssBaroAltDiffs {
+			avgDiff += v
+		}
+		if len(gnssBaroAltDiffs) > 0 {
+			avgDiff /= len(gnssBaroAltDiffs)
+		}
+
+		trafficMutex.Lock()
+		for _, ti := range traffic {
+			if stratuxClock.Since(ti.Last_GnssDiff) > 1 * time.Second || ti.Alt == 0 {
+				continue // already considered this value or we don't have a value - skip
+			}
+			if len(gnssBaroAltDiffs) >= 5 && math.Abs(float64(ti.GnssDiffFromBaroAlt - int32(avgDiff))) > 1000 {
+				// For a simple outlier detection, disregard traffic who's gnssBaroAltDiff is more than 1000ft from the average
+				continue
+			}
+			bucket := int(ti.Alt / 1000)
+			if val, ok := gnssBaroAltDiffs[bucket]; ok {
+				// weighted average - don't tune too quickly... smooth over one minute (for one aircraft, half a minute for two, etc).
+				gnssBaroAltDiffs[bucket] = (val * 59 + int(ti.GnssDiffFromBaroAlt) * 1) / 60
+			} else {
+				gnssBaroAltDiffs[bucket] = int(ti.GnssDiffFromBaroAlt)
+			}
+		}
+		trafficMutex.Unlock()
+
+
+		if isGPSValid() && (!isTempPressValid() || mySituation.BaroSourceType == BARO_TYPE_NONE || mySituation.BaroSourceType == BARO_TYPE_ADSBESTIMATE) {
+			// We have no real baro source.. try to estimate baro altitude with the help of closeby ADS-B aircraft that define BaroGnssDiff...
+
+			myAlt := mySituation.GPSAltitudeMSL
+			if isTempPressValid() {
+				myAlt = mySituation.BaroPressureAltitude // we have something better than GPS from a previous run or something
+			}
+			alts := make([]float64, 0, len(gnssBaroAltDiffs))
+			diffs := make([]float64, 0, len(gnssBaroAltDiffs))
+			weights := make([]float64, 0, len(gnssBaroAltDiffs)) // Weigh close altitudes higher than far altitudes for linreg
+			for k, v := range gnssBaroAltDiffs {
+				bucketAlt := float64(k * 1000 + 500)
+				alts = append(alts, bucketAlt) // Compute back from bucket to "real" altitude (+500 to be in the center of the bucket)
+				diffs = append(diffs, float64(v))
+				// Weight: 1 / altitudeDifference / 1000
+				weight:= math.Abs(float64(myAlt) - bucketAlt)
+				if weight == 0 {
+					weight = 1
+				} else {
+					weight = math.Min(1 / (weight / 1000), 1)
+				}
+				weights = append(weights, weight)
+			}
+			if len(gnssBaroAltDiffs) >= 2 {
+				slope, intercept, valid := linRegWeighted(alts, diffs, weights)
+				if valid {
+					gnssBaroDiff := float64(myAlt) * slope + intercept
+					mySituation.muBaro.Lock()
+					mySituation.BaroLastMeasurementTime = stratuxClock.Time
+					mySituation.BaroPressureAltitude = mySituation.GPSHeightAboveEllipsoid - float32(gnssBaroDiff)
+					mySituation.BaroSourceType = BARO_TYPE_ADSBESTIMATE
+					mySituation.muBaro.Unlock()
+				}
+			}
+		}
+
+	}
 }
 
 func gpsSerialReader() {
@@ -2099,7 +2258,9 @@ func gpsAttitudeSender() {
 		if !(globalStatus.GPS_connected || globalStatus.IMUConnected) {
  			myGPSPerfStats = make([]gpsPerfStats, 0) // reinitialize statistics on disconnect / reconnect
  		} else {
- 			calculateNavRate()
+			mySituation.muGPSPerformance.Lock()
+			calculateNavRate()
+			mySituation.muGPSPerformance.Unlock()
  		}
 
 		for !(globalSettings.IMU_Sensor_Enabled && globalStatus.IMUConnected) && (globalSettings.GPS_Enabled && globalStatus.GPS_connected) {
