@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # To run this, make sure that this is installed:
-# sudo apt install --yes qemu-user-static qemu-system-arm
+sudo apt install --yes qemu-user-static qemu-system-arm
 # Run this script as root.
 # Run with argument "dev" to not clone the stratux repository from remote, but instead copy this current local checkout onto the image
 
