@@ -75,7 +75,8 @@ if [ "$1" == "dev" ]; then
     cp -ra $SRCDIR .
     cd stratux && git checkout $2 && cd ..
 else
-    git clone --recursive -b $2 https://github.com/b3nn0/stratux.git
+    # git clone --recursive -b $2 https://github.com/b3nn0/stratux.git
+    git clone --recursive -b $2 https://github.com/vontresc/stratux.git
 fi
 cd ../..
 
